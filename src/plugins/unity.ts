@@ -457,5 +457,5 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
 }
 function spanSize(n: NodeV1): number { const m = /^L(\d+)-L(\d+)$/.exec(n.span); return m ? Number(m[2]) - Number(m[1]) : Infinity; }
 
-const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.2', analyze };
+const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.3', analyze };
 export default unity;

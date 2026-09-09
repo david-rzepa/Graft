@@ -294,8 +294,8 @@ export async function buildGraph(
   const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root, repoFiles) });
 
   const plugins = await runPlugins(root, pluginPlan, nodes);
-  nodes.push(...plugins.nodes);
-  edges.push(...plugins.edges);
+  for (const node of plugins.nodes) nodes.push(node);
+  for (const edge of plugins.edges) edges.push(edge);
   for (const [path, text] of plugins.sources) if (!sources.has(path)) sources.set(path, text);
 
   // Guard 5 (minimum-substance): node counts aren't known until nodes are

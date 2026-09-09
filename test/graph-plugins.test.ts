@@ -110,3 +110,22 @@ test('invalid plugin configuration is actionable and the CLI loads the same plug
   config({ watch: ['../outside.mjs'] });
   assert.throws(() => planPlugins(root, join(root, 'graft')), /watch paths/);
 });
+
+test('large plugin results build without exceeding JavaScript argument limits', async t => {
+  const { root, put, graph } = fixture(t);
+  put('index.mjs', `export default {
+    apiVersion: 1, id: 'large', version: '1',
+    analyze() {
+      const nodes = Array.from({ length: 150000 }, (_, i) => ({
+        id: 'data.custom#plugin:large:' + i, path: 'data.custom', name: 'object' + i,
+        kind: 'variable', origin: 'plugin', span: 'L1-L1', signature: null,
+        exported: true, body_hash: 'synthetic', summary_state: 'pending', summary: null, crux: null
+      }));
+      return { nodes, edges: nodes.map(n => ({ source: nodes[0].id, target: n.id, relation: 'references', confidence: 'extracted' })) };
+    }
+  };`);
+  await buildGraph(root, { graphOnly: true });
+  const g = graph();
+  assert.equal(g.nodes.filter(n => n.origin === 'plugin').length, 150000);
+  assert.equal(g.edges.filter(e => e.plugin === 'large').length, 150000);
+});

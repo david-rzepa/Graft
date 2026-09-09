@@ -117,8 +117,8 @@ export async function runPlugins(root: string, plan: PluginPlan, coreNodes: Node
     }
     // No unresolved plugin targets: omissions must be diagnostics, never phantom dependencies.
     for (const e of result.edges) if (!ids.has(e.source) || !ids.has(e.target)) throw new Error(`plugin ${plugin.id}: dangling edge ${e.source} -> ${e.target}`);
-    nodes.push(...result.nodes);
-    edges.push(...result.edges.map(e => ({ ...e, plugin: plugin.id })));
+    for (const node of result.nodes) nodes.push(node);
+    for (const edge of result.edges) edges.push({ ...edge, plugin: plugin.id });
     diagnostics.push(...(result.diagnostics ?? []).map(d => `${plugin.id}: ${d}`));
     versions[plugin.id] = plugin.version;
   }

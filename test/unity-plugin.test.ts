@@ -97,7 +97,7 @@ test('Unity plugin joins C# fields/lifecycle, prefabs, scene instances, events a
   assert.deepEqual(result.errors, []);
   const g = graph();
   assert.deepEqual(checkGraphInvariants(g).problems, []);
-  assert.equal(g.meta.plugins?.unity, '1.1.2');
+  assert.equal(g.meta.plugins?.unity, '1.1.3');
   const component = g.nodes.find(n => n.id === `Assets/Button.prefab#plugin:unity:object:${id}`)!;
   assert.ok(component, '64-bit fileID is exact');
   assert.ok(g.edges.some(e => e.source === component.id && e.target === 'Assets/Controller.cs#Controller'));
