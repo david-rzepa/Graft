@@ -97,7 +97,7 @@ test('Unity plugin joins C# fields/lifecycle, prefabs, scene instances, events a
   assert.deepEqual(result.errors, []);
   const g = graph();
   assert.deepEqual(checkGraphInvariants(g).problems, []);
-  assert.equal(g.meta.plugins?.unity, '1.1.0');
+  assert.equal(g.meta.plugins?.unity, '1.1.1');
   const component = g.nodes.find(n => n.id === `Assets/Button.prefab#plugin:unity:object:${id}`)!;
   assert.ok(component, '64-bit fileID is exact');
   assert.ok(g.edges.some(e => e.source === component.id && e.target === 'Assets/Controller.cs#Controller'));
@@ -296,4 +296,37 @@ test('orphan analysis follows importer and AssetReference edges, retains bundled
   const cli = JSON.parse(execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'orphans', root, '--json', '--limit', '0'], { encoding: 'utf8' }));
   assert.equal(cli.candidates.length, 0);
   assert.equal(cli.totalCandidates, r.totalCandidates);
+});
+
+
+test('Unity multiline quoted text preserves following references and original spans', async t => {
+  const { root, put, graph } = fixture(t);
+  const text = `%YAML 1.1
+--- !u!114 &1
+MonoBehaviour:
+  m_Name: 'A multiline
+
+    display name
+
+'
+  m_text: "A multiline
+    double-quoted value
+"
+  icon: {fileID: 2800000, guid: ${ICON}, type: 3}
+--- !u!1 &2
+GameObject:
+  m_Name: Next object
+`;
+  put('Assets/Multiline.prefab', text);
+  await buildGraph(root);
+  const g = graph();
+  assert(g.edges.some(e => e.source === 'Assets/Multiline.prefab' && e.label === 'icon'));
+  const object = g.nodes.find(n => n.id === 'Assets/Multiline.prefab#plugin:unity:object:1')!;
+  assert.equal(object.name, 'A multiline\ndisplay name\n');
+  assert.equal(object.span, 'L2-L12');
+  assert(g.nodes.some(n => n.name === 'Next object' && n.span === 'L13-L16'));
+  const old = JSON.stringify(g);
+  put('Assets/Multiline.prefab', text.replace('  m_Name: Next object', "  m_Name: 'Never closed"));
+  await assert.rejects(() => buildGraph(root), /Missing closing/);
+  assert.equal(JSON.stringify(graph()), old);
 });

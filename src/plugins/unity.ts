@@ -1,6 +1,7 @@
 /** Unity text-serialization indexer. No editor, model, or network required. */
 import { basename, extname } from 'node:path';
 import { parse } from 'yaml';
+import { normalizeUnityQuotes } from './unity-yaml.js';
 import { Parser, type Language, type Node as SyntaxNode } from 'web-tree-sitter';
 import { loadWasmLanguage } from '../graph/generic.js';
 import { contentHash } from '../util/id.js';
@@ -48,7 +49,7 @@ function parseDocuments(path: string, text: string): Document[] {
     ids.add(head.id);
     const body = lines.slice(head.at + 1, end).join('\n');
     // failsafe preserves GUIDs with only digits and 64-bit fileIDs exactly.
-    const value: unknown = parse(body, { schema: 'failsafe', maxAliasCount: 0, logLevel: 'error' });
+    const value: unknown = parse(normalizeUnityQuotes(body), { schema: 'failsafe', maxAliasCount: 0, logLevel: 'error' });
     if (!object(value) || Object.keys(value).length !== 1) throw new Error(`invalid Unity object at line ${head.at + 1}`);
     const type = Object.keys(value)[0];
     const data = value[type];
@@ -456,5 +457,5 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
 }
 function spanSize(n: NodeV1): number { const m = /^L(\d+)-L(\d+)$/.exec(n.span); return m ? Number(m[2]) - Number(m[1]) : Infinity; }
 
-const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.0', analyze };
+const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.1', analyze };
 export default unity;

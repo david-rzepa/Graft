@@ -78,6 +78,10 @@ conservative. Auto-property backing-field serialization and FormerlySerializedAs
 rename mapping are not currently resolved to C# declarations. Serialized
 references themselves remain indexed.
 
+Unity plugin 1.1.1 also accepts Unity's multiline quoted fields whose standalone
+closing quote is unindented. Normalization happens in memory, preserves source
+line numbers, and leaves malformed YAML validation enabled.
+
 Use Unity's Force Text serialization for scene/prefab internals. Binary/imported
 assets are represented by their `.meta` records; imported subasset internals are
 not decoded. Metadata is evidence of an asset identity, not a check that the binary
