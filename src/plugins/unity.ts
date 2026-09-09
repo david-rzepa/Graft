@@ -346,7 +346,9 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
   const rootAsset = (path: string, reason: string, evidence = path) => {
     const target = assetTargets.get(path);
     if (!target) { issue('unresolved entry points', `${evidence}: ${path}`); return; }
-    const input = allById.get(target)!.path;
+    const targetPath = allById.get(target)!.path;
+    const input = ctx.files.has(targetPath) ? targetPath : `${path}.meta`;
+    if (!ctx.files.has(input)) { issue('entry points without declared inputs', path); return; }
     const id = `${input}#plugin:unity:root:${encodeURIComponent(reason + ':' + evidence)}`;
     addNode(node(input, id, reason, 'Unity asset entry point', evidence));
     edge(id, target, `${reason}: ${evidence}`, 'references', 'inferred');
@@ -457,5 +459,5 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
 }
 function spanSize(n: NodeV1): number { const m = /^L(\d+)-L(\d+)$/.exec(n.span); return m ? Number(m[2]) - Number(m[1]) : Infinity; }
 
-const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.3', analyze };
+const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.4', analyze };
 export default unity;

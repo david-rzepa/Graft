@@ -266,7 +266,9 @@ Resources/Addressables calls are included in the report. Use a complete project
 index and verify candidates in Unity before removing anything.
 
 Version 1.1.3 also removes JavaScript argument-count limits when assembling large
-plugin graphs, preserving all nodes and edges in large Unity projects.
+plugin graphs, preserving all nodes and edges in large Unity projects. Version
+1.1.4 anchors native-code entry-point annotations in declared `.meta` inputs;
+missing metadata produces a coverage diagnostic instead of an invalid node.
 
 ### Large-project heap size
 

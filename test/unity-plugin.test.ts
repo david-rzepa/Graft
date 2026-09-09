@@ -97,7 +97,7 @@ test('Unity plugin joins C# fields/lifecycle, prefabs, scene instances, events a
   assert.deepEqual(result.errors, []);
   const g = graph();
   assert.deepEqual(checkGraphInvariants(g).problems, []);
-  assert.equal(g.meta.plugins?.unity, '1.1.3');
+  assert.equal(g.meta.plugins?.unity, '1.1.4');
   const component = g.nodes.find(n => n.id === `Assets/Button.prefab#plugin:unity:object:${id}`)!;
   assert.ok(component, '64-bit fileID is exact');
   assert.ok(g.edges.some(e => e.source === component.id && e.target === 'Assets/Controller.cs#Controller'));
@@ -352,4 +352,19 @@ StateMachine:
   const refs = graph().edges.filter(e => e.source === 'Assets/Legacy.controller');
   assert(refs.some(e => e.label?.includes('data[0].second[0]') && e.target === 'Assets/Button.prefab'));
   assert(refs.some(e => e.label?.includes('data[1].second[0]') && e.target.includes('icon.png')));
+});
+
+test('Unity roots for native code use declared metadata inputs rather than core code paths', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Plugins/native.h', 'int native_function(void);\n');
+  put('Assets/Plugins/native.h.meta', 'guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n');
+  put('Assets/Plugins/unmanaged.h', 'int another_function(void);\n');
+  await buildGraph(root);
+  const g = graph();
+  assert(g.nodes.some(n => n.path === 'Assets/Plugins/native.h' && n.origin !== 'plugin'));
+  assert(g.nodes.some(n => n.path === 'Assets/Plugins/native.h.meta' && n.role === 'Unity asset entry point'));
+  assert(!g.nodes.some(n => n.path.endsWith('.h') && n.origin === 'plugin'));
+  const { findOrphans } = await import('../src/graph/orphans.js');
+  assert(!findOrphans(g).candidates.some(c => c.path === 'Assets/Plugins/native.h'));
+  assert(g.meta.diagnostics?.some(d => d.includes('entry points without declared inputs')));
 });
