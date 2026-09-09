@@ -758,6 +758,23 @@ program
   });
 
 program
+  .command("orphans")
+  .description("Find Unity asset orphan candidates by entry-point reachability ($0, advisory)")
+  .argument(...DIR_ARG)
+  .option("--in <path>", "filter candidate paths (reachability still uses the full graph)")
+  .option("--limit <n>", "maximum candidates to display", "100")
+  .option("--json", "include structured roots, evidence and coverage gaps")
+  .action(async (dirArg: string | undefined, opts: { in?: string; limit: string; json?: boolean }) => {
+    const dir = noteQuery(queryRoot(dirArg));
+    const globalOpts = program.opts<{ dir?: string }>();
+    if (readWorkspace(dir, globalOpts.dir)) throw new Error('Run orphans on a single Unity repository, not a workspace parent.');
+    await ensureFreshGraph(dir, { contextDir: globalOpts.dir });
+    const { orphanReport, formatOrphans } = await import('./graph/orphans.js');
+    const report = orphanReport(dir, globalOpts.dir, { in: opts.in, limit: Number(opts.limit) });
+    console.log(opts.json ? JSON.stringify(report, null, 2) : formatOrphans(report));
+  });
+
+program
   .command("callers")
   .description(
     "Who calls/references a symbol ($0, no LLM). --direction out gives callees (what it calls); --depth N (or all) walks transitively for full blast radius",

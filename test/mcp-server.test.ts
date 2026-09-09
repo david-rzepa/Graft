@@ -60,6 +60,7 @@ test('initialize → tools/list → tools/call round-trip', async () => {
 });
 
 const ALL_TOOLS = [
+  'graft_find_orphans',
   'graft_find_code',
   'graft_file_api',
   'graft_check_freshness',

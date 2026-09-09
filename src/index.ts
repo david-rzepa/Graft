@@ -48,3 +48,5 @@ export type { CruxSummarizer, FileCruxInput, NodeCrux, NodeRef } from "./ai/crux
 // Graph plugin authoring API (v1).
 export type { GraphPlugin, PluginContext, PluginResult, PluginSpec } from "./plugins/types.js";
 export type { NodeV1, EdgeV1, GraphV1 } from "./graph/types.js";
+
+export { findOrphans, orphanReport, formatOrphans, type OrphanReport } from "./graph/orphans.js";

@@ -72,7 +72,7 @@ This is static asset understanding, not an emulation of Unity's runtime or a
 compiler. It does not flatten every prefab variant into an effective instantiated
 scene. It records source correspondence and overrides as dependencies. It cannot
 resolve runtime-created objects, dynamic asset keys, custom loading wrappers,
-Addressables labels/folder expansion, imported DLL types, or callbacks registered
+Addressables label-based call targets, imported DLL types, or callbacks registered
 only at runtime. Event overload resolution and ambiguous class names are
 conservative. Auto-property backing-field serialization and FormerlySerializedAs
 rename mapping are not currently resolved to C# declarations. Serialized
@@ -211,3 +211,49 @@ Git ignores, large assets, cold/incremental equivalence and the MCP query path.
 Unity serialization references:
 [Text serialization format](https://docs.unity3d.com/2022.3/Documentation/Manual/FormatDescription.html),
 [UnityEvents](https://docs.unity3d.com/2022.3/Documentation/Manual/UnityEvents.html).
+
+### Orphan candidates (Unity plugin 1.1+)
+
+```sh
+graft orphans                     # first 100 candidates, with coverage gaps
+graft orphans --json              # structured entry points and reference evidence
+graft orphans --in Assets/UI --limit 500
+```
+
+Codex can use `graft_find_orphans` with optional `in` and `limit` arguments.
+Restart an existing MCP session after installing this version to discover the tool.
+The command refreshes the graph and refuses stale or missing fingerprints. Run it
+on a single Unity repository, not a workspace parent. `--in` filters the output;
+it never narrows the graph used for reachability. JSON `totalCandidates` counts
+all matching candidates before the display limit.
+
+Roots include enabled `EditorBuildSettings` scenes (path and GUID), serialized
+project settings (including preloaded assets), every Resources/StreamingAssets
+asset, Addressables entries and folder descendants, AssetBundle importer labels,
+editor assets, and plugin/assembly inputs. C# code is conservatively retained; this is not unused-script
+analysis. Importer fileID/GUID references and serialized Addressables AssetReferences
+add dependency edges. Reachability is computed across whole assets, so unreachable
+cycles remain candidates even when they have incoming references from each other.
+
+Declare extra asset paths or directory prefixes for custom build/runtime loading:
+
+```json
+{
+  "version": 1,
+  "plugins": [{ "module": "unity", "options": {
+    "roots": ["Assets/RuntimeCatalog.asset", "Assets/CustomLoadedContent"]
+  }}]
+}
+```
+
+These roots are repository-specific configuration; the Unity behavior is shared
+by the built-in plugin. Paths are relative, case-sensitive, and do not use globs.
+Missing configured roots are reported. JSON includes each root's reason/evidence,
+candidate incoming asset paths, and analysis gaps. No assets are deleted.
+
+A candidate means no indexed route from these roots, **not safe to delete**.
+Ignored files, partial builds, size limits, absent metadata, binary contents,
+custom importers/build scripts, platform build profiles, remote content, reflection
+and dynamic loading can hide dependencies. Known unresolved references and dynamic
+Resources/Addressables calls are included in the report. Use a complete project
+index and verify candidates in Unity before removing anything.

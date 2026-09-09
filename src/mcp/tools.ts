@@ -2,6 +2,7 @@
  * The MCP tools, as pure functions over the existing engine.
  * `callTool` never throws — hosts get soft errors as isError content.
  */
+import { orphanReport } from '../graph/orphans.js';
 import { Graft } from '../engine.js';
 import { formatAsk, skeleton, formatSkeleton } from '../ask/ask.js';
 import { formatCheckReport } from '../context/check.js';
@@ -40,6 +41,14 @@ function unknownSymbolText(query: string): string {
 }
 
 export const TOOLS: ToolDef[] = [
+  {
+    name: 'graft_find_orphans',
+    description: 'Find Unity asset orphan candidates using entry-point reachability. Returns roots, reference evidence and coverage gaps. Advisory only; never proof of safe deletion. Requires Unity plugin 1.1+.',
+    inputSchema: { type: 'object', properties: {
+      in: { type: 'string', description: 'Filter reported paths only; analyze the entire indexed graph.' },
+      limit: { type: 'integer', minimum: 0, default: 100 },
+    }, additionalProperties: false },
+  },
   {
     name: 'graft_find_code',
     description:
@@ -222,6 +231,7 @@ export async function callTool(
   try {
     const name = canonicalToolName(requestedName);
     const ws = readWorkspace(root, dirOverride);
+    if (ws && name === 'graft_find_orphans') return { text: 'Use a single Unity repository, not a workspace parent.', isError: true };
     // Freshness first: an answer that cites file:line has to be about the code as
     // it is right now, including edits nobody has committed (or even saved through
     // this agent). ~3ms when nothing moved; a structural, $0 rebuild when it did.
@@ -251,6 +261,10 @@ async function callSingleTool(
   dirOverride?: string,
 ): Promise<{ text: string; isError: boolean }> {
   switch (name) {
+      case 'graft_find_orphans': {
+        const report = orphanReport(root, dirOverride, { in: typeof args.in === 'string' ? args.in : undefined, limit: typeof args.limit === 'number' ? args.limit : 100 });
+        return { text: JSON.stringify(report, null, 2), isError: false };
+      }
       case 'graft_find_code': {
         const query = String(args.query ?? '');
         if (!query) return { text: 'graft_find_code requires a query', isError: true };

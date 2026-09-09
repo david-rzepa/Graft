@@ -82,6 +82,7 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
   const byPath = new Map<string, Document[]>();
   const guidPaths = new Map<string, string[]>();
   const assetTargets = new Map<string, string>();
+  const folders = new Set<string>();
 
   for (const [path, text] of ctx.files) {
     if (path.endsWith('.cs')) continue;
@@ -89,9 +90,10 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
       const guid = guidOf(/^guid:\s*([a-f\d]{32})\s*$/im.exec(text)?.[1]);
       if (!guid) { issue('metadata without a valid GUID', path); continue; }
       const asset = path.slice(0, -5);
+      if (/^folderAsset:\s*yes\s*$/m.test(text)) folders.add(asset);
       const paths = guidPaths.get(guid) ?? []; paths.push(asset); guidPaths.set(guid, paths);
       // Binary/imported assets are represented by their textual metadata, not read as code.
-      const id = addNode(node(path, assetId(path), basename(asset), 'Unity asset metadata', text));
+      const id = addNode(node(path, assetId(path), basename(asset), folders.has(asset) ? 'Unity folder metadata' : 'Unity asset metadata', text));
       assetTargets.set(asset, id);
       continue;
     }
@@ -212,7 +214,9 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
               try {
                 const key = arg.text.startsWith('@"') ? arg.text.slice(2, -1).replace(/""/g, '"') : JSON.parse(arg.text);
                 if (typeof key === 'string') literalLoads.push({ path, line: ast.startPosition.row + 1, api, key });
-              } catch { /* C# escapes unsupported by JSON: no guessed key. */ }
+              } catch { issue('unsupported asset key literals', `${path}:${ast.startPosition.row + 1}`); }
+            } else if (api) {
+              issue('dynamic asset loads', `${path}:${ast.startPosition.row + 1}: ${api}`);
             }
           }
           for (const child of ast.namedChildren) walk(child, owner);
@@ -336,6 +340,82 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
     }
   }
 
+  // Explicit asset roots are separate from lifecycle callbacks: a callback alone
+  // does not prove that its scene or prefab is used.
+  const rootAsset = (path: string, reason: string, evidence = path) => {
+    const target = assetTargets.get(path);
+    if (!target) { issue('unresolved entry points', `${evidence}: ${path}`); return; }
+    const input = allById.get(target)!.path;
+    const id = `${input}#plugin:unity:root:${encodeURIComponent(reason + ':' + evidence)}`;
+    addNode(node(input, id, reason, 'Unity asset entry point', evidence));
+    edge(id, target, `${reason}: ${evidence}`, 'references', 'inferred');
+  };
+  const rootTree = (path: string, reason: string, evidence = path) => {
+    rootAsset(path, reason, evidence);
+    if (folders.has(path)) for (const child of assetTargets.keys()) {
+      if (child.startsWith(path + '/') && !folders.has(child)) rootAsset(child, reason, evidence);
+    }
+  };
+  for (const [path] of assetTargets) {
+    if (folders.has(path)) continue;
+    if (/(?:^|\/)ProjectSettings\//.test(path)) rootAsset(path, 'Project settings');
+    if (/(?:^|\/)Resources\//.test(path)) rootAsset(path, 'Resources');
+    if (/(?:^|\/)StreamingAssets\//.test(path)) rootAsset(path, 'StreamingAssets');
+    if (/(?:^|\/)Editor(?: Default Resources)?\//.test(path) || /(?:^|\/)Gizmos\//.test(path)) rootAsset(path, 'Editor assets');
+    // This report finds asset candidates, not unused C# types. Keep code and its
+    // discovered asset dependencies conservatively alive, including reflection.
+    if (path.endsWith('.cs')) rootAsset(path, 'C# code (conservative)');
+    if (/\.(?:dll|asmdef|asmref|rsp|so|dylib|bundle)$/.test(path) || /(?:^|\/)Plugins\//.test(path)) rootAsset(path, 'Plugin or assembly input (conservative)');
+  }
+  let sawBuildSettings = false;
+  for (const doc of documents.values()) {
+    if (doc.type === 'EditorBuildSettings') {
+      sawBuildSettings = true;
+      for (const scene of Array.isArray(doc.data.m_Scenes) ? doc.data.m_Scenes : []) {
+        if (!object(scene) || !['1', 'true'].includes(scalar(scene.enabled))) continue;
+        const path = scalar(scene.path), matches = guidPaths.get(guidOf(scene.guid));
+        const byGuid = matches?.length === 1 ? matches[0] : undefined;
+        if (byGuid && path && byGuid !== path) issue('build scene path/GUID disagreement', path);
+        for (const p of new Set([byGuid, path].filter((p): p is string => !!p))) rootAsset(p, 'Enabled build scene', doc.path);
+        if (!byGuid && !path) issue('unresolved entry points', `${doc.path}: enabled scene without path or resolvable GUID`);
+      }
+    }
+    visit(doc.data, value => {
+      const guid = guidOf(value.m_AssetGUID);
+      if (!guid || nullGuid(guid)) return;
+      const paths = guidPaths.get(guid);
+      const target = paths?.length === 1 ? assetTargets.get(paths[0]) : undefined;
+      if (target) edge(doc.node.id, target, 'Addressables AssetReference');
+      else issue('unresolved AssetReference GUIDs', `${doc.path}: ${guid}`);
+    });
+  }
+  if (!sawBuildSettings) issue('missing EditorBuildSettings coverage', 'enabled build scenes are unknown');
+  // Importer references may carry dependencies even for binary assets.
+  for (const [path, text] of ctx.files) {
+    if (!path.endsWith('.meta')) continue;
+    const asset = path.slice(0, -5), from = assetTargets.get(asset);
+    if (!from) continue;
+    try {
+      const metadata: unknown = parse(text, { schema: 'failsafe', maxAliasCount: 0, logLevel: 'error' });
+      visit(metadata, value => {
+        const target = resolveRef(value, asset);
+        if (target) edge(from, target, 'importer dependency');
+        if (scalar(value.assetBundleName)) rootTree(asset, 'AssetBundle', path);
+      });
+    } catch { issue('unparsed importer metadata', path); }
+  }
+  const custom = ctx.options.roots;
+  if (custom !== undefined && (!Array.isArray(custom) || custom.some(p => typeof p !== 'string'))) {
+    throw new Error('Unity options.roots must be an array of repository-relative asset paths or directory prefixes');
+  }
+  for (const raw of (custom ?? []) as string[]) {
+    const path = raw.replace(/\\/g, '/').replace(/\/$/, '');
+    if (!path || path.startsWith('/') || path.split('/').includes('..')) throw new Error(`Invalid Unity root: ${raw}`);
+    const matches = [...assetTargets.keys()].filter(p => p === path || p.startsWith(path + '/'));
+    if (!matches.length) issue('unresolved custom roots', raw);
+    for (const match of matches) if (!folders.has(match)) rootAsset(match, 'Configured root', raw);
+  }
+
   // Resource keys can be resolved from asset paths without an editor. Addressable
   // keys are taken only from serialized group entries, never guessed from filenames.
   const resources = new Map<string, Set<string>>(), addresses = new Map<string, Set<string>>();
@@ -351,6 +431,8 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
       const paths = guidPaths.get(guidOf(entry.m_GUID));
       const address = scalar(entry.m_Address);
       const target = paths?.length === 1 ? assetTargets.get(paths[0]) : undefined;
+      if (!target) issue('unresolved Addressables entries', `${doc.path}: ${scalar(entry.m_GUID)}`);
+      if (target && paths?.length === 1) rootTree(paths[0], 'Addressables entry', doc.path);
       if (address && target) { addKey(addresses, address, target); edge(doc.node.id, target, `Addressables address ${address}`); }
     }
   });
@@ -374,5 +456,5 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
 }
 function spanSize(n: NodeV1): number { const m = /^L(\d+)-L(\d+)$/.exec(n.span); return m ? Number(m[2]) - Number(m[1]) : Infinity; }
 
-const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.0.0', analyze };
+const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.0', analyze };
 export default unity;

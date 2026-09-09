@@ -7,6 +7,7 @@
 
 /** The tools graft advertises today, as their canonical names. */
 export const GRAFT_MCP_TOOL_CANONICAL = [
+  'graft_find_orphans',
   'graft_find_code',
   'graft_find_all',
   'graft_trace_calls',
