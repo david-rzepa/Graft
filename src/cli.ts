@@ -526,6 +526,7 @@ program
       },
       { repo: buildRoot },
     );
+    for (const d of g.diagnostics ?? []) console.error(`⚠ ${d}`);
     for (const e of g.errors) console.error(`✗ ${e}`);
 
     const rel = relative(process.cwd(), g.contextDir) || "graft";

@@ -40,6 +40,7 @@
     "dist",
     "scripts",
     "README.md",
+    "docs/graph-plugins.md",
     "LICENSE"
   ],
   "scripts": {
@@ -72,7 +73,8 @@
     "tree-sitter-wasm": "^1.1.6",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.18.2",
-    "web-tree-sitter": "^0.26.13"
+    "web-tree-sitter": "^0.26.13",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/d3-force": "^3.0.10",

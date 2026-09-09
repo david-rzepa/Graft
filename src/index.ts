@@ -44,3 +44,7 @@ export { ChatSummarizer } from "./ai/summarize.js";
 export type { Summarizer } from "./ai/summarize.js";
 export { ChatCruxSummarizer } from "./ai/crux.js";
 export type { CruxSummarizer, FileCruxInput, NodeCrux, NodeRef } from "./ai/crux.js";
+
+// Graph plugin authoring API (v1).
+export type { GraphPlugin, PluginContext, PluginResult, PluginSpec } from "./plugins/types.js";
+export type { NodeV1, EdgeV1, GraphV1 } from "./graph/types.js";

@@ -51,7 +51,7 @@ export function hitLine(direction: Direction, hit: EdgeHit, showDepth: boolean, 
   const arrow = ARROW[direction];
   const depthTag = showDepth ? ` [depth ${hit.depth}]` : "";
   const label = hit.node ? `${hit.node.name} (${hit.node.path}:${hit.node.span})` : `${hit.id} (unresolved import)`;
-  const line = `  ${hit.relation} ${arrow} ${label}${depthTag}`;
+  const line = `  ${hit.relation} ${arrow} ${label}${depthTag}${hit.label ? ` [${hit.label}]` : ""}`;
   return quote ? `${line}\n      ${quote.n}: ${quote.text.trim()}` : line;
 }
 

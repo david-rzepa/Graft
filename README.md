@@ -189,6 +189,21 @@ Alongside the markdown graph, `graft build` builds `graft/.graph/wiring.json` â€
 
 ---
 
+## Graph plugins and Unity
+
+Enable the built-in Unity graph plugin with `.graft/plugins.json`:
+
+```json
+{ "version": 1, "plugins": [{ "module": "unity" }] }
+```
+
+Run `graft build` to connect C# scripts to scenes, prefabs, Inspector references,
+UnityEvents and literal asset-loading keys. The existing MCP tools query the
+combined graph, and asset edits participate in automatic refresh. External
+JavaScript plugins can add other framework or project-specific relationships.
+See [Graph plugins and Unity](docs/graph-plugins.md) for setup, the plugin API,
+verification commands and static-analysis coverage limits.
+
 ## Supported languages
 
 Graft parses with tree-sitter at two levels of fidelity, plus an optional

@@ -13,6 +13,7 @@
  * whole node set, so an incremental build's output is byte-identical to a cold
  * one — the invariant `test/graph-incremental.test.ts` pins down.
  */
+import { planPlugins, runPlugins } from "../plugins/loader.js";
 import { readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
@@ -121,6 +122,7 @@ export interface GraphBuildResult {
   languages: string[];
   meaning: EnrichStats;
   errors: string[];
+  diagnostics?: string[];
 }
 
 /** Every Go module in the repo: each `go.mod`'s declared `module` path and the repo
@@ -164,6 +166,7 @@ export async function buildGraph(
   const onlyDirs = opts.onlyDirs && opts.onlyDirs.length > 0 ? new Set(opts.onlyDirs) : undefined;
   const repoFiles = filterByOnlyDirs(walked, root, onlyDirs);
   const files = listSourceStats(root, outDir, repoFiles);
+  const pluginPlan = planPlugins(root, outDir, repoFiles, onlyDirs);
   const discoveredScopes = discoverScopes(root, repoFiles);
 
   const nodes: NodeV1[] = [];
@@ -290,6 +293,11 @@ export async function buildGraph(
 
   const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root, repoFiles) });
 
+  const plugins = await runPlugins(root, pluginPlan, nodes);
+  nodes.push(...plugins.nodes);
+  edges.push(...plugins.edges);
+  for (const [path, text] of plugins.sources) if (!sources.has(path)) sources.set(path, text);
+
   // Guard 5 (minimum-substance): node counts aren't known until nodes are
   // assembled, so the merge-tiny-scopes-into-root guard runs here.
   const scopes = applyMinSubstanceGuard(discoveredScopes, nodes);
@@ -305,6 +313,7 @@ export async function buildGraph(
       edgeCount: edges.length,
       languages: [...langs].sort(),
       scopes,
+      ...(pluginPlan.plugins.length ? { plugins: plugins.versions, diagnostics: plugins.diagnostics } : {}),
     },
     nodes,
     edges,
@@ -358,7 +367,7 @@ export async function buildGraph(
   // these source bytes." Nothing about the projections below — which is why it is
   // safe to write here, and why `graphOnly` builds (the query path, which stops
   // right after this line) are still recorded as fresh.
-  writeFingerprint(outDir, entries, opts.onlyDirs);
+  writeFingerprint(outDir, entries, opts.onlyDirs, plugins.snapshot);
 
   // Tier-2 passive surface: project the nodes into per-file markdown cards, and
   // refresh the INDEX roster. Pure projection — no LLM, no network.
@@ -406,5 +415,6 @@ export async function buildGraph(
     languages: [...langs].sort(),
     meaning,
     errors,
+    diagnostics: plugins.diagnostics,
   };
 }

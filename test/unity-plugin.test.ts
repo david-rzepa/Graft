@@ -1,0 +1,240 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { buildGraph } from '../src/graph/build.js';
+import { checkGraph } from '../src/graph/check.js';
+import { readGraph, wiringPath } from '../src/graph/write.js';
+import { probeDrift, isClean } from '../src/graph/fingerprint.js';
+import { ensureFreshGraph } from '../src/graph/refresh.js';
+import { checkGraphInvariants } from '../src/graph/invariants.js';
+import { callTool } from '../src/mcp/tools.js';
+
+const SCRIPT = '11111111111111111111111111111111';
+const PREFAB = '22222222222222222222222222222222';
+const ICON = '33333333333333333333333333333333';
+const id = '9223372036854775806';
+const controller = `using UnityEngine;
+public class Controller : MonoBehaviour
+{
+    [SerializeField] private UnityEngine.Object icon;
+    private UnityEngine.Object notSerialized;
+    [System.NonSerialized] public UnityEngine.Object ignored;
+    void Awake() { }
+    public void OnClick() { }
+    public void Load()
+    {
+        Resources.Load<UnityEngine.Object>("Icons/icon");
+        UnityEngine.AddressableAssets.Addressables.LoadAssetAsync<UnityEngine.Object>("card-icon");
+        // Resources.Load<UnityEngine.Object>("not-real");
+    }
+}
+public class Ordinary
+{
+    void Update() { }
+}
+`;
+const prefab = `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: Card Button
+  m_Component:
+  - component: {fileID: ${id}}
+--- !u!114 &${id}
+MonoBehaviour:
+  m_GameObject: {fileID: 1}
+  m_Script: {fileID: 11500000, guid: ${SCRIPT}, type: 3}
+  icon: {fileID: 2800000, guid: ${ICON}, type: 3}
+  clicked:
+    m_PersistentCalls:
+      m_Calls:
+      - m_Target: {fileID: ${id}}
+        m_MethodName: OnClick
+        m_CallState: 2
+`;
+function fixture(t: any) {
+  const root = mkdtempSync(join(tmpdir(), 'graft-unity-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const put = (p: string, s: string) => { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), s); };
+  put('.graft/plugins.json', JSON.stringify({ version: 1, plugins: [{ module: 'unity' }] }));
+  put('Assets/Controller.cs', controller);
+  put('Assets/Controller.cs.meta', `fileFormatVersion: 2\nguid: ${SCRIPT}\n`);
+  put('Assets/Resources/Icons/icon.png.meta', `fileFormatVersion: 2\nguid: ${ICON}\n`);
+  put('Assets/Button.prefab', prefab);
+  put('Assets/Button.prefab.meta', `fileFormatVersion: 2\nguid: ${PREFAB}\n`);
+  put('Assets/Level.unity', `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &8
+PrefabInstance:
+  m_SourcePrefab: {fileID: 100100000, guid: ${PREFAB}, type: 3}
+  m_Modification:
+    m_Modifications:
+    - target: {fileID: ${id}, guid: ${PREFAB}, type: 3}
+      propertyPath: icon
+      objectReference: {fileID: 2800000, guid: ${ICON}, type: 3}
+--- !u!114 &9 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: ${id}, guid: ${PREFAB}, type: 3}
+  m_PrefabInstance: {fileID: 8}
+`);
+  put('Assets/AddressableAssetsData/AssetGroups/Default.asset', `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &1
+MonoBehaviour:
+  m_Name: Default
+  m_SerializeEntries:
+  - m_GUID: ${ICON}
+    m_Address: card-icon
+`);
+  return { root, put, graph: () => readGraph(wiringPath(join(root, 'graft')))! };
+}
+
+test('Unity plugin joins C# fields/lifecycle, prefabs, scene instances, events and asset keys through MCP', async t => {
+  const { root, graph } = fixture(t);
+  const result = await buildGraph(root);
+  assert.deepEqual(result.errors, []);
+  const g = graph();
+  assert.deepEqual(checkGraphInvariants(g).problems, []);
+  assert.equal(g.meta.plugins?.unity, '1.0.0');
+  const component = g.nodes.find(n => n.id === `Assets/Button.prefab#plugin:unity:object:${id}`)!;
+  assert.ok(component, '64-bit fileID is exact');
+  assert.ok(g.edges.some(e => e.source === component.id && e.target === 'Assets/Controller.cs#Controller'));
+  const field = g.nodes.find(n => n.origin === 'plugin' && n.name === 'icon')!;
+  assert.ok(field, 'private SerializeField field indexed');
+  assert.ok(!g.nodes.some(n => n.origin === 'plugin' && ['notSerialized', 'ignored'].includes(n.name)));
+  assert.ok(g.edges.some(e => e.source === field.id && e.target.endsWith('icon.png.meta#plugin:unity:asset')));
+  assert.ok(g.edges.some(e => e.label?.startsWith('prefab override icon')));
+  assert.ok(g.edges.some(e => e.source === 'Assets/Level.unity#plugin:unity:object:9' && e.target === 'Assets/Controller.cs#Controller'));
+  assert.ok(g.edges.some(e => e.relation === 'calls' && e.label?.startsWith('UnityEvent') && e.target === 'Assets/Controller.cs#OnClick'));
+  assert.ok(g.nodes.some(n => n.name === 'Unity Controller.Awake'));
+  assert.ok(!g.nodes.some(n => n.name === 'Unity Ordinary.Update'));
+  assert.ok(g.edges.some(e => e.label === 'Resources.Load("Icons/icon")'));
+  assert.ok(g.edges.some(e => e.label === 'Addressables.LoadAssetAsync("card-icon")'));
+  assert.deepEqual(g.meta.diagnostics, []);
+  assert.equal((await checkGraph(root)).ok, true);
+  assert.ok(isClean(probeDrift(root, join(root, 'graft'))!));
+  const traced = await callTool(root, 'graft_trace_calls', { symbol: 'OnClick' });
+  assert.equal(traced.isError, false); assert.match(traced.text, /Button.prefab/); assert.match(traced.text, /UnityEvent/);
+  const found = await callTool(root, 'graft_find_code', { query: 'Card Button prefab', limit: 3 });
+  assert.equal(found.isError, false); assert.match(found.text, /Button.prefab/);
+});
+
+test('prefab-only edits, GUID remaps, deletes and disabling plugin refresh without losing core nodes', async t => {
+  const { root, put, graph } = fixture(t);
+  await buildGraph(root);
+  const graphFile = wiringPath(join(root, 'graft'));
+  const first = readFileSync(graphFile, 'utf8');
+  await buildGraph(root);
+  assert.equal(readFileSync(graphFile, 'utf8'), first, 'incremental equals cold');
+  await buildGraph(root, { reuse: false });
+  assert.equal(readFileSync(graphFile, 'utf8'), first, 'forced cold equals incremental');
+  put('Assets/Button.prefab', prefab.replace('m_CallState: 2', 'm_CallState: 0'));
+  assert.equal((await checkGraph(root)).ok, false);
+  assert.ok((await ensureFreshGraph(root)).refreshed);
+  assert.ok(!graph().edges.some(e => e.label?.startsWith('UnityEvent')));
+  put('Assets/Resources/Icons/icon.png.meta', `guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n`);
+  assert.equal((await checkGraph(root)).ok, false, 'edge drift from metadata alone');
+  assert.ok((await ensureFreshGraph(root)).refreshed);
+  assert.ok(!graph().edges.some(e => e.source.endsWith(':icon') && e.target.endsWith('icon.png.meta#plugin:unity:asset')));
+  rmSync(join(root, 'Assets/Button.prefab'));
+  assert.ok((await ensureFreshGraph(root)).refreshed);
+  assert.ok(!graph().nodes.some(n => n.path === 'Assets/Button.prefab'));
+  put('.graft/plugins.json', JSON.stringify({ version: 1, plugins: [] }));
+  assert.ok((await ensureFreshGraph(root)).refreshed);
+  assert.ok(!graph().nodes.some(n => n.origin === 'plugin'));
+  assert.ok(graph().nodes.some(n => n.id === 'Assets/Controller.cs#Controller'));
+  assert.equal((await checkGraph(root)).ok, true);
+});
+
+test('Unity inputs obey only-dir and malformed YAML fails without replacing the last good graph', async t => {
+  const { root, put, graph } = fixture(t);
+  await buildGraph(root, { onlyDirs: ['Assets/Resources'] });
+  assert.ok(graph().nodes.every(n => n.path.startsWith('Assets/Resources/')));
+  assert.equal((await checkGraph(root)).ok, true);
+  assert.ok(isClean(probeDrift(root, join(root, 'graft'))!));
+  await buildGraph(root);
+  const saved = readFileSync(wiringPath(join(root, 'graft')), 'utf8');
+  put('Assets/Button.prefab', '%YAML 1.1\n--- !u!114 &1\nMonoBehaviour:\n  broken: [\n');
+  await assert.rejects(buildGraph(root), /Unity Assets\/Button.prefab/);
+  assert.equal(readFileSync(wiringPath(join(root, 'graft')), 'utf8'), saved);
+  const refresh = await ensureFreshGraph(root);
+  assert.equal(refresh.refreshed, false); assert.ok(refresh.note);
+});
+
+test('inherited Unity classes, ambiguous callbacks, duplicate GUIDs and binary assets report conservative coverage', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Base.cs', `using UnityEngine;
+public class Base : MonoBehaviour
+{
+  protected void Update() { }
+  [SerializeField] private Object inheritedIcon;
+}
+`);
+  put('Assets/Controller.cs', controller.replace('Controller : MonoBehaviour', 'Controller : Base').replace('public void OnClick() { }', 'public void OnClick() { }\n    public void OnClick(int value) { }'));
+  put('Assets/Button.prefab', prefab.replace('  icon:', '  inheritedIcon:'));
+  put('Assets/Binary.asset', '\0binary Unity data');
+  await buildGraph(root);
+  assert.ok(graph().nodes.some(n => n.name === 'Unity Controller.Update'));
+  assert.ok(graph().edges.some(e => e.label === 'serialized field inheritedIcon'));
+  assert.ok(!graph().edges.some(e => e.label?.startsWith('UnityEvent')));
+  assert.ok(graph().meta.diagnostics?.some(d => d.includes('ambiguous UnityEvent')));
+  assert.ok(graph().meta.diagnostics?.some(d => d.includes('non-text Unity assets')));
+  put('Assets/Duplicate.cs.meta', `guid: ${SCRIPT}\n`);
+  await buildGraph(root);
+  assert.ok(graph().meta.diagnostics?.some(d => d.includes('duplicate GUIDs')));
+  assert.ok(!graph().edges.some(e => e.label === 'm_Script' && e.target === 'Assets/Controller.cs#Controller'));
+  assert.equal((await checkGraph(root)).ok, true, 'coverage gaps are distinct from drift');
+});
+
+test('large Unity YAML is indexed beyond the core source limit and aliases cannot expand unboundedly', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Large.unity', '%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Large\n  payload: ' + 'x'.repeat(1_100_000) + '\n');
+  await buildGraph(root);
+  assert.ok(graph().nodes.some(n => n.path === 'Assets/Large.unity'));
+  assert.equal((await checkGraph(root)).ok, true);
+  put('Assets/Large.unity', '%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: &a [x,x]\n  value: *a\n');
+  await assert.rejects(buildGraph(root), /alias/i);
+});
+
+test('scalar and m_-prefixed user fields bind to prefab assignments, and null script refs do not resolve', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Controller.cs', controller.replace('private UnityEngine.Object icon;', 'private UnityEngine.Object m_icon;\n    public int health;'));
+  put('Assets/Button.prefab', prefab.replace('  icon:', '  health: 10\n  m_icon:'));
+  await buildGraph(root);
+  assert.ok(graph().edges.some(e => e.label === 'serialized field health'));
+  assert.ok(graph().edges.some(e => e.label === 'serialized field m_icon'));
+  put('Assets/Button.prefab', prefab.replace('fileID: 11500000', 'fileID: 0'));
+  await buildGraph(root);
+  assert.ok(!graph().edges.some(e => e.source.startsWith('Assets/Button.prefab') && e.target === 'Assets/Controller.cs#Controller'));
+});
+
+test('plugin asset cards cannot overwrite same-stem script cards, and explicit summaries receive plugin source', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Controller.prefab', prefab);
+  const summarized = new Set<string>();
+  const result = await buildGraph(root, {
+    summarizer: { async describeFile(input) {
+      summarized.add(input.path);
+      return input.nodes.map(n => ({ id: n.id, summary: 'Fixture explanation.', crux_start: 0, crux_end: 0 }));
+    } },
+  });
+  assert.equal(result.meaning.failedFiles, 0);
+  assert.ok(summarized.has('Assets/Controller.prefab'));
+  assert.ok(graph().nodes.filter(n => n.path === 'Assets/Controller.prefab').every(n => n.summary_state === 'ready'));
+  assert.match(readFileSync(join(root, 'graft/Assets/Controller.md'), 'utf8'), /^# Assets\/Controller.cs/);
+  assert.match(readFileSync(join(root, 'graft/Assets/Controller.prefab.md'), 'utf8'), /^# Assets\/Controller.prefab/);
+  await buildGraph(root);
+  assert.ok(graph().nodes.filter(n => n.path === 'Assets/Controller.prefab').every(n => n.summary_state === 'ready'), 'structural rebuild keeps summaries');
+});
+
+
+test('Resources keys are case-insensitive and LoadAll connects every asset in a folder', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Resources/Icons/second.png.meta', 'guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n');
+  put('Assets/Controller.cs', controller.replace('"Icons/icon"', '"ICONS/ICON"').replace('void Awake() { }', 'void Awake() { Resources.LoadAll<UnityEngine.Object>("icons"); }'));
+  await buildGraph(root);
+  assert.ok(graph().edges.some(e => e.label === 'Resources.Load("ICONS/ICON")'));
+  assert.equal(graph().edges.filter(e => e.label === 'Resources.LoadAll("icons")').length, 2);
+});

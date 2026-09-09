@@ -55,8 +55,8 @@ function isConceptNodeFile(path: string): boolean {
 /** The card path for a source path: mirror the tree, swap the extension for .md.
  * Root-level sources share `graft/` with concept nodes. If that filename is
  * already a concept, park the file card under `_root/` instead of clobbering it. */
-function cardPathFor(outDir: string, sourcePath: string): string {
-  const md = sourcePath.replace(/\.[^./]+$/, "") + ".md";
+function cardPathFor(outDir: string, sourcePath: string, retainExtension = false): string {
+  const md = (retainExtension ? sourcePath : sourcePath.replace(/\.[^./]+$/, "")) + ".md";
   const primary = join(outDir, md);
   if (sourcePath.includes("/")) return primary;
   if (isConceptNodeFile(primary)) return join(outDir, ROOT_CARD_DIR, md);
@@ -183,7 +183,9 @@ export function writeCards(graph: GraphV1, outDir: string): CardStats {
   for (const [sourcePath, group] of byPath) {
     const fileNode = group.find((n) => n.kind === "file");
     const symbols = group.filter((n) => n.kind !== "file");
-    const cardPath = cardPathFor(outDir, sourcePath);
+    // Plugin assets often share a stem with a script or another asset type. Keep
+    // their full filenames so Button.cs, Button.prefab and Button.mat cannot collide.
+    const cardPath = cardPathFor(outDir, sourcePath, group.every(n => n.origin === "plugin"));
     mkdirSync(dirname(cardPath), { recursive: true });
     writeFileSync(cardPath, renderCard(sourcePath, fileNode, symbols, concepts.get(sourcePath) ?? []));
     written.add(cardPath);

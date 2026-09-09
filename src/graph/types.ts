@@ -68,7 +68,9 @@ export interface NodeV1 {
   // How the node was extracted. "ast" = a first-class hand-written extractor
   // (TS/JS/Python/Go, full-fidelity). "generic" = the tags.scm breadth tier
   // (signature-only; symbols + bare edges, no scope-aware binding).
-  origin: "ast" | "generic";
+  origin: "ast" | "generic" | "plugin";
+  /** Plugin-specific, human-readable semantic role (e.g. Unity MonoBehaviour). */
+  role?: string;
   body_hash: string; // sha256 of the definition text; the Tier-2 re-run trigger
   chars?: number; // byte length of the WHOLE file (file nodes only); the baseline
   //                 `ask` uses to estimate tokens saved vs reading the file whole
@@ -101,6 +103,9 @@ export type Relation =
   | "extends"; // class → base class
 
 export interface EdgeV1 {
+  /** Optional evidence label retained by plugin-aware renderers. */
+  label?: string;
+  plugin?: string;
   source: string; // node id
   target: string; // node id, or an unresolved module string for imports
   relation: Relation;
@@ -126,6 +131,8 @@ export interface GraphV1 {
     /** Ranking scopes: posix path prefixes relative to the graph root, "" = root scope.
      * Absent (old graphs) ≡ [{ prefix: "", label: "" }]. Sorted by prefix length desc. */
     scopes?: ScopeV1[];
+    plugins?: Record<string, string>;
+    diagnostics?: string[];
   };
   nodes: NodeV1[];
   edges: EdgeV1[];

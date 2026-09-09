@@ -17,6 +17,8 @@
  * code. `stale` is a meaning-layer signal the last build already recorded.
  * `pending` (never summarized) is not drift — it's a deliberate Tier-1-only build.
  */
+import { planPlugins, runPlugins } from "../plugins/loader.js";
+import type { NodeV1 } from "./types.js";
 import { resolve } from "node:path";
 import { relPosix } from "../util/paths.js";
 import { contextDirFor } from "../context/node-file.js";
@@ -45,6 +47,7 @@ export interface GraphCheckResult {
    * coverage figure. A deep build that lost most of its LLM calls (#127) is only
    * distinguishable from a deliberate Tier-1 build by the SHARE that is missing. */
   nodes: number;
+  diagnostics?: string[];
 }
 
 export interface GraphCheckOptions {
@@ -97,6 +100,7 @@ export async function checkGraph(
   await warmContainerGrammars(
     new Set(sourceFiles.map((f) => containerLangOf(f)?.name).filter((n): n is string => !!n)),
   );
+  const coreNodes: NodeV1[] = [];
   const current = new Map<string, string>(); // id → body_hash
   for (const file of sourceFiles) {
     // The same three-way branch `buildGraph` uses, in the same order. The two must
@@ -129,11 +133,24 @@ export async function checkGraph(
       // null here means the next tier graft gains fails loudly in the type
       // checker instead.
       if (extracted === null) continue;
+      coreNodes.push(...extracted.nodes);
       for (const n of extracted.nodes) current.set(n.id, n.body_hash);
     } catch {
       // parse failure → skip; the committed nodes for this file become `removed`.
     }
   }
+
+  const plan = planPlugins(root, outDir, undefined, onlyDirs);
+  const plugins = await runPlugins(root, plan, coreNodes);
+  for (const n of plugins.nodes) current.set(n.id, n.body_hash);
+  result.diagnostics = plugins.diagnostics;
+  // Plugin dependencies can change without changing any definition body (GUID remaps,
+  // prefab overrides, configuration). Compare the actual semantic edge set as well.
+  const edgeKey = (e: import("./types.js").EdgeV1) => JSON.stringify([e.source, e.relation, e.target, e.confidence, e.label, e.plugin]);
+  const before = (committed.edges.filter(e => e.plugin).map(edgeKey)).sort();
+  const after = plugins.edges.map(edgeKey).sort();
+  if (JSON.stringify(before) !== JSON.stringify(after)) result.changed.push("plugin dependencies");
+  if (plan.signature !== (readFingerprint(outDir)?.plugins?.signature ?? "")) result.changed.push("plugin configuration or implementation");
 
   const committedById = new Map(committed.nodes.map((n) => [n.id, n]));
   result.nodes = committedById.size;
@@ -173,7 +190,8 @@ export function formatGraphCheckReport(r: GraphCheckResult): string {
     // the repo was never deep-built or a deep build failed most of its calls.
     const pct = r.nodes > 0 ? Math.round(((r.nodes - r.pending) / r.nodes) * 100) : 0;
     const note = r.pending ? ` (${formatPendingNote(r, pct)})` : "";
-    return `graph check: OK — the wiring graph is in sync with the code.${note}`;
+    const diagnostics = r.diagnostics?.length ? `\nPlugin coverage: ${r.diagnostics.join("; ")}` : "";
+    return `graph check: OK — the wiring graph is in sync with the code.${note}${diagnostics}`;
   }
 
   const lines: string[] = ["graph check: STALE", ""];

@@ -18,6 +18,9 @@
  * degrade safely: no fingerprint → "unknown, rebuild"; no parse cache → the
  * rebuild is just cold.
  */
+import { planPlugins, type PluginSnapshot } from "../plugins/loader.js";
+import { statSync } from "node:fs";
+import { relPosix } from "../util/paths.js";
 import { join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { contentHash } from "../util/id.js";
@@ -54,6 +57,7 @@ export interface Fingerprint {
    * — so the query-path freshness probe (which never sees a CLI flag) enumerates the
    * identical whitelisted set and excluded files are never phantom "added" drift. */
   onlyDirs?: string[];
+  plugins?: PluginSnapshot;
 }
 
 /** What moved since the last build. Empty in all three arrays = nothing to do. */
@@ -88,11 +92,13 @@ export function writeFingerprint(
   outDir: string,
   entries: Record<string, ExtractEntry>,
   onlyDirs?: string[],
+  plugins?: PluginSnapshot,
 ): boolean {
   const files: Record<string, Print> = {};
   for (const [rel, e] of Object.entries(entries)) files[rel] = [e.size, e.mtimeMs, e.hash];
   try {
     const record: Fingerprint = { version: FINGERPRINT_VERSION, extractor: stamp(), files };
+    if (plugins?.signature) record.plugins = plugins;
     if (onlyDirs && onlyDirs.length > 0) record.onlyDirs = onlyDirs;
     writeJsonAtomic(fingerprintPath(outDir), record, true);
     pruneSidecars(join(outDir, CACHE_DIR), FINGERPRINT_PREFIX);
@@ -189,6 +195,25 @@ export function probeDrift(root: string, outDir: string): Drift | null {
     if (!seen.has(rel)) drift.removed.push(rel);
   }
 
+  const pluginPlan = planPlugins(root, outDir, undefined, onlyDirs);
+  if (pluginPlan.signature !== (fp.plugins?.signature ?? "")) drift.changed.push(".graft/plugins.json (configuration or implementation)");
+  const pluginSeen = new Set<string>();
+  for (const abs of new Set(pluginPlan.plugins.flatMap(p => p.files))) {
+    const rel = relPosix(root, abs);
+    pluginSeen.add(rel);
+    const prior = fp.plugins?.files[rel];
+    if (!prior) { drift.added.push(rel); continue; }
+    const [size, mtimeMs, hash] = prior;
+    try {
+      if (statUnchanged({ size, mtimeMs, hash }, statSync(abs))) continue;
+      const text = readSourceFile(abs);
+      if (text === null || contentHash(text) !== hash) drift.changed.push(rel);
+    } catch { drift.changed.push(rel); }
+  }
+  for (const rel of Object.keys(fp.plugins?.files ?? {})) if (!pluginSeen.has(rel)) drift.removed.push(rel);
+  drift.changed = [...new Set(drift.changed)];
+  drift.added = [...new Set(drift.added)];
+  drift.removed = [...new Set(drift.removed)];
   drift.changed.sort();
   drift.added.sort();
   drift.removed.sort();
