@@ -270,6 +270,9 @@ plugin graphs, preserving all nodes and edges in large Unity projects. Version
 1.1.4 anchors native-code entry-point annotations in declared `.meta` inputs;
 missing metadata produces a coverage diagnostic instead of an invalid node.
 
+Large graph and search-index JSON files are written and read incrementally,
+avoiding the single-string size limit independently of the Node heap ceiling.
+
 ### Large-project heap size
 
 Large Unity graphs may exceed Node's default heap. For a 16 GB heap ceiling:

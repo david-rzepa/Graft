@@ -19,7 +19,8 @@
  * contribution is folded into the stored `df` at query time (see `ask.ts`),
  * which is why `df` here counts symbol/file nodes only.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { readLargeJson, writeLargeJson } from '../util/large-json.js';
 import { dirname, join } from "node:path";
 import type { GraphV1 } from "../graph/types.js";
 import { CACHE_DIR } from "../context/node-file.js";
@@ -126,7 +127,7 @@ export function writeAskIndex(outDir: string, graph: GraphV1): string {
 
   const outPath = askIndexPath(outDir);
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, JSON.stringify(index) + "\n");
+  writeLargeJson(outPath, index);
   return outPath;
 }
 
@@ -139,7 +140,7 @@ export function readAskIndex(outDir: string): AskIndex | null {
   const path = askIndexPath(outDir);
   if (!existsSync(path)) return null;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
+    const raw = statSync(path).size < 16_000_000 ? JSON.parse(readFileSync(path, "utf8")) : readLargeJson(path);
     if (
       !raw ||
       typeof raw !== "object" ||

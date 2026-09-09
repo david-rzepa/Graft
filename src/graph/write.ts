@@ -8,8 +8,9 @@
  * timestamps, so rebuilding an unchanged repo produces a byte-identical file and
  * git diffs stay minimal.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readLargeJson, writeLargeJson } from '../util/large-json.js';
 import type { EdgeV1, GraphV1, NodeV1 } from "./types.js";
 
 /** Hidden subdir under the context dir that holds machine-only graph artifacts. */
@@ -27,7 +28,7 @@ export function wiringPath(outDir: string): string {
  */
 export function readGraph(path: string): GraphV1 | null {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as GraphV1;
+    return (statSync(path).size < 16_000_000 ? JSON.parse(readFileSync(path, "utf8")) : readLargeJson(path)) as unknown as GraphV1;
   } catch {
     return null;
   }
@@ -51,18 +52,7 @@ export function writeGraph(graph: GraphV1, outDir: string): string {
   // build (a manual `graft build` racing the refresh child) write the same scratch
   // file and hand the loser a corrupt graph, and a failed rename would otherwise
   // leave a full-size orphan behind that nothing ever cleans up.
-  const tmp = `${path}.${process.pid}.tmp`;
-  try {
-    writeFileSync(tmp, JSON.stringify(sorted, null, 2) + "\n");
-    renameSync(tmp, path);
-  } catch (e) {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      /* nothing more we can do */
-    }
-    throw e;
-  }
+  writeLargeJson(path, sorted);
   return path;
 }
 
