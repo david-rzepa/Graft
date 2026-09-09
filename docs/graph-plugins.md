@@ -80,7 +80,10 @@ references themselves remain indexed.
 
 Unity plugin 1.1.1 also accepts Unity's multiline quoted fields whose standalone
 closing quote is unindented. Normalization happens in memory, preserves source
-line numbers, and leaves malformed YAML validation enabled.
+line numbers, and leaves malformed YAML validation enabled. Version 1.1.2 also
+preserves legacy Unity maps with repeated `data` keys containing `first`/`second`
+pairs as ordered collections. All entries contribute dependency edges; ordinary
+duplicate keys remain errors.
 
 Use Unity's Force Text serialization for scene/prefab internals. Binary/imported
 assets are represented by their `.meta` records; imported subasset internals are
@@ -261,3 +264,16 @@ custom importers/build scripts, platform build profiles, remote content, reflect
 and dynamic loading can hide dependencies. Known unresolved references and dynamic
 Resources/Addressables calls are included in the report. Use a complete project
 index and verify candidates in Unity before removing anything.
+
+### Large-project heap size
+
+Large Unity graphs may exceed Node's default heap. For a 16 GB heap ceiling:
+
+```sh
+NODE_OPTIONS="--max-old-space-size=16384" graft build /path/to/project
+```
+
+This is a ceiling, not a preallocation. It does not fix parser errors or reduce
+Graft's memory usage. An MCP server that automatically rebuilds the same project
+needs the equivalent Node flag or `NODE_OPTIONS` environment setting at startup;
+a larger heap on a separate CLI invocation does not change an existing server.

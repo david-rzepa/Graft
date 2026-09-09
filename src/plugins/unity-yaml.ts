@@ -1,3 +1,5 @@
+import { parseDocument, isMap, isScalar, visit, YAMLSeq } from 'yaml';
+
 /** Unity can emit a multiline quoted value with its closing quote at column zero.
  * Normalize only a standalone closing delimiter, never string contents or source
  * files. Keep line counts intact for graph spans and retain strict YAML validation.
@@ -43,4 +45,34 @@ function closes(text: string, start: number, quote: string): boolean {
     return true;
   }
   return false;
+}
+
+/** Legacy Unity maps serialize key/value pairs as repeated `data` mappings.
+ * Retain all pairs before converting the YAML AST to JS; disabling uniqueKeys
+ * alone would silently keep only the last entry and lose graph dependencies.
+ */
+export function parseUnityYaml(text: string): unknown {
+  const doc = parseDocument(normalizeUnityQuotes(text), {
+    schema: 'failsafe', logLevel: 'error',
+    uniqueKeys: (a, b) => isScalar(a) && isScalar(b)
+      ? a.value === b.value && a.value !== 'data'
+      : a === b,
+  });
+  if (doc.errors.length) throw doc.errors[0];
+  visit(doc, {
+    Map(_, map) {
+      const entries = map.items.filter(p => isScalar(p.key) && p.key.value === 'data');
+      if (entries.length < 2) return;
+      if (!entries.every(p => isMap(p.value) && p.value.items.length === 2 &&
+        p.value.has('first') && p.value.has('second'))) {
+        throw new Error('Duplicate data keys must contain Unity first/second pairs');
+      }
+      const values = new YAMLSeq(doc.schema);
+      values.items = entries.map(p => p.value);
+      entries[0].value = values;
+      const removed = new Set(entries.slice(1));
+      map.items = map.items.filter(p => !removed.has(p));
+    },
+  });
+  return doc.toJS({ maxAliasCount: 0 });
 }

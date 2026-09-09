@@ -20,3 +20,37 @@ test('leaves valid strings, block contents, and unterminated scalars unchanged',
     "Object:\n  text: plain apostrophe's\n  next: 1\n",
   ]) assert.equal(normalizeUnityQuotes(input), input);
 });
+
+test('legacy Unity data maps retain every ordered entry without losing 64-bit IDs', async () => {
+  const { parseUnityYaml } = await import('../src/plugins/unity-yaml.js');
+  const value = parseUnityYaml(`StateMachine:
+  m_OrderedTransitions:
+    data:
+      first: {fileID: 9223372036854775806}
+      second: [{fileID: 111}]
+    data:
+      first: {fileID: 222}
+      second: [{fileID: 333}]
+    data:
+      first: {fileID: 0}
+      second: []
+  m_Name: unchanged
+`) as any;
+  assert.deepEqual(value.StateMachine.m_OrderedTransitions.data, [
+    { first: { fileID: '9223372036854775806' }, second: [{ fileID: '111' }] },
+    { first: { fileID: '222' }, second: [{ fileID: '333' }] },
+    { first: { fileID: '0' }, second: [] },
+  ]);
+  assert.equal(value.StateMachine.m_Name, 'unchanged');
+});
+
+test('legacy-map handling still rejects malformed YAML, aliases, and other duplicate keys', async () => {
+  const { parseUnityYaml } = await import('../src/plugins/unity-yaml.js');
+  for (const input of [
+    'Object:\n  m_Name: one\n  m_Name: two\n',
+    'Object:\n  data: one\n  data: two\n',
+    'Object:\n  data: {first: 1, second: 2}\n  data: {first: 3}\n',
+    'Object:\n  text: "unterminated\n',
+    'Object:\n  a: &a [1, 2]\n  b: *a\n',
+  ]) assert.throws(() => parseUnityYaml(input), undefined, input);
+});

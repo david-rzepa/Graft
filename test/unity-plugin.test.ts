@@ -97,7 +97,7 @@ test('Unity plugin joins C# fields/lifecycle, prefabs, scene instances, events a
   assert.deepEqual(result.errors, []);
   const g = graph();
   assert.deepEqual(checkGraphInvariants(g).problems, []);
-  assert.equal(g.meta.plugins?.unity, '1.1.1');
+  assert.equal(g.meta.plugins?.unity, '1.1.2');
   const component = g.nodes.find(n => n.id === `Assets/Button.prefab#plugin:unity:object:${id}`)!;
   assert.ok(component, '64-bit fileID is exact');
   assert.ok(g.edges.some(e => e.source === component.id && e.target === 'Assets/Controller.cs#Controller'));
@@ -329,4 +329,27 @@ GameObject:
   put('Assets/Multiline.prefab', text.replace('  m_Name: Next object', "  m_Name: 'Never closed"));
   await assert.rejects(() => buildGraph(root), /Missing closing/);
   assert.equal(JSON.stringify(graph()), old);
+});
+
+
+test('legacy controller transitions preserve references from every repeated data entry', async t => {
+  const { root, put, graph } = fixture(t);
+  put('Assets/Legacy.controller', `%YAML 1.1
+--- !u!1107 &1
+StateMachine:
+  m_OrderedTransitions:
+    data:
+      first: {fileID: 0}
+      second: [{fileID: 100100000, guid: ${PREFAB}}]
+    data:
+      first: {fileID: 0}
+      second: [{fileID: 2800000, guid: ${ICON}}]
+    data:
+      first: {fileID: 0}
+      second: []
+`);
+  await buildGraph(root);
+  const refs = graph().edges.filter(e => e.source === 'Assets/Legacy.controller');
+  assert(refs.some(e => e.label?.includes('data[0].second[0]') && e.target === 'Assets/Button.prefab'));
+  assert(refs.some(e => e.label?.includes('data[1].second[0]') && e.target.includes('icon.png')));
 });
