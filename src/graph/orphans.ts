@@ -17,13 +17,13 @@ const assetPath = (path: string) => path.endsWith('.meta') ? path.slice(0, -5) :
 
 export function findOrphans(graph: GraphV1, opts: { in?: string; limit?: number; gaps?: string[] } = {}): OrphanReport {
   const version = (graph.meta.plugins?.unity ?? '').split('.').map(Number);
-  if (!(version[0] > 1 || (version[0] === 1 && version[1] >= 1))) {
-    throw new Error('Rebuild with the Unity plugin version 1.1 or later to analyze orphan candidates.');
+  if (!(version[0] > 1 || (version[0] === 1 && version[1] >= 2))) {
+    throw new Error('Rebuild with the Unity plugin version 1.2 or later to analyze orphan candidates.');
   }
   const nodes = new Map(graph.nodes.map(n => [n.id, n]));
   const assets = new Set<string>();
   const folders = new Set(graph.nodes.filter(n => n.role === 'Unity folder metadata').map(n => assetPath(n.path)));
-  for (const n of graph.nodes) if (n.role === 'Unity asset metadata' || n.role === 'Unity serialized asset') assets.add(assetPath(n.path));
+  for (const n of graph.nodes) if (n.role === 'Unity asset metadata' || n.role === 'Unity serialized asset' || (n.kind === 'file' && n.path.endsWith('.cs'))) assets.add(assetPath(n.path));
   const outgoing = new Map<string, Set<string>>(), incoming = new Map<string, Set<string>>();
   const roots: OrphanReport['roots'] = [];
   for (const e of graph.edges) {
@@ -49,8 +49,8 @@ export function findOrphans(graph: GraphV1, opts: { in?: string; limit?: number;
   const gaps = [...new Set([
     'Candidates require review; static analysis does not establish that deletion is safe.',
     'Coverage is limited to indexed, non-ignored inputs within the configured scope and file-size limit; missing metadata and excluded files can hide dependencies.',
-    'Binary asset contents, custom importers/build scripts, reflection and arbitrary runtime loading are not fully analyzed. C# code is conservatively retained.',
-    'Resources, Addressables entries, AssetBundles and editor assets are conservatively retained. Platform-specific build profiles and remote content may need configured roots.',
+    'Binary asset contents, custom importers/build scripts, reflection and arbitrary runtime loading are not fully analyzed. Scripts are analyzed at file granularity using indexed references; C# type resolution and dynamically invoked code are incomplete. Configure roots for entry points the index cannot discover.',
+    'Resources, Addressables entries, AssetBundles and non-script editor assets are conservatively retained. Platform-specific build profiles and remote content may need configured roots.',
     ...(graph.meta.diagnostics ?? []), ...(opts.gaps ?? []),
   ])];
   if (!roots.some(r => r.reason === 'Enabled build scene')) gaps.push('No enabled build scene roots were found; configure runtime entry points if this project uses another build pipeline.');

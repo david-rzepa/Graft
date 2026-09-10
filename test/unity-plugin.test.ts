@@ -97,7 +97,7 @@ test('Unity plugin joins C# fields/lifecycle, prefabs, scene instances, events a
   assert.deepEqual(result.errors, []);
   const g = graph();
   assert.deepEqual(checkGraphInvariants(g).problems, []);
-  assert.equal(g.meta.plugins?.unity, '1.1.4');
+  assert.equal(g.meta.plugins?.unity, '1.2.0');
   const component = g.nodes.find(n => n.id === `Assets/Button.prefab#plugin:unity:object:${id}`)!;
   assert.ok(component, '64-bit fileID is exact');
   assert.ok(g.edges.some(e => e.source === component.id && e.target === 'Assets/Controller.cs#Controller'));
@@ -367,4 +367,59 @@ test('Unity roots for native code use declared metadata inputs rather than core 
   const { findOrphans } = await import('../src/graph/orphans.js');
   assert(!findOrphans(g).candidates.some(c => c.path === 'Assets/Plugins/native.h'));
   assert(g.meta.diagnostics?.some(d => d.includes('entry points without declared inputs')));
+});
+
+test('orphan analysis does not root unused scripts, even in special Unity folders', async t => {
+  const {root, put, graph} = fixture(t);
+  const scripts = ['Assets/Unused.cs', 'Assets/Plugins/VendorUnused.cs', 'Assets/Editor/UnusedEditor.cs', 'Assets/Resources/UnusedResource.cs'];
+  for (const [i, path] of scripts.entries()) {
+    put(path, `using UnityEngine; public class ${path.split('/').pop()!.slice(0, -3)} : MonoBehaviour { void Awake() {} }`);
+    put(path + '.meta', `guid: ${String(i + 4).repeat(32)}\n`);
+  }
+  put('Assets/NoMetadata.cs', 'public class NoMetadata {}');
+  put('Assets/Unreferenced.png.meta', 'guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n');
+  put('Assets/Unused.cs.meta', 'guid: 44444444444444444444444444444444\nMonoImporter:\n  defaultReferences:\n  - picture: {fileID: 2800000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}\n');
+  put('ProjectSettings/EditorBuildSettings.asset', '%YAML 1.1\n--- !u!1045 &1\nEditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Level.unity\n');
+  await buildGraph(root);
+  const {findOrphans} = await import('../src/graph/orphans.js');
+  const report = findOrphans(graph());
+  const candidates = new Set(report.candidates.map(c => c.path));
+  for (const path of [...scripts, 'Assets/Unreferenced.png', 'Assets/NoMetadata.cs']) assert(candidates.has(path), path);
+  assert(!candidates.has('Assets/Controller.cs'), 'scene -> prefab -> m_Script stays reachable');
+  for (const path of scripts) assert(!report.roots.some(r => r.path === path), path);
+  assert(!report.roots.some(r => r.reason === 'C# code (conservative)'));
+  const old = graph();
+  old.meta.plugins!.unity = '1.1.4';
+  assert.throws(() => findOrphans(old), /Rebuild.*version 1.2/);
+  const mcp = await callTool(root, 'graft_find_orphans', {in: 'Assets/Unused.cs'});
+  assert.equal(mcp.isError, false, mcp.text);
+  assert.equal(JSON.parse(mcp.text).candidates[0].path, 'Assets/Unused.cs');
+});
+
+test('explicit Unity entry attributes and configured roots retain scripts, not comments or ordinary lifecycle methods', async t => {
+  const {root, put, graph} = fixture(t);
+  const files: Record<string,string> = {
+    'Bootstrap': '[UnityEngine.RuntimeInitializeOnLoadMethodAttribute(UnityEngine.RuntimeInitializeLoadType.BeforeSceneLoad)] static void Boot() { Helper.Run(); }',
+    'EditorBoot': '[UnityEditor.InitializeOnLoadMethod] static void Init() {}',
+    'Menu': '[UnityEditor.MenuItem("Tools/Do thing")] static void Execute() {}',
+    'Fake': '// [RuntimeInitializeOnLoadMethod]\n void Awake() {}\n string example = "[InitializeOnLoadMethod]";',
+    'WrongNamespace': '[SomethingElse.RuntimeInitializeOnLoadMethod] static void Init() {}',
+    'InvalidSignature': '[UnityEngine.RuntimeInitializeOnLoadMethod] void Init() {}',
+    'Helper': 'public static void Run() {}',
+    'Explicit': 'void NeverCalled() {}',
+  };
+  for (const [i, [name, body]] of Object.entries(files).entries()) {
+    put(`Assets/${name}.cs`, `public class ${name} { ${body} }`);
+    put(`Assets/${name}.cs.meta`, `guid: ${(i+10).toString(16).repeat(32).slice(0,32)}\n`);
+  }
+  put('Assets/EditorClass.cs', '[UnityEditor.InitializeOnLoad] public class EditorClass { static EditorClass() {} }');
+  put('Assets/EditorClass.cs.meta', 'guid: 99999999999999999999999999999999\n');
+  put('.graft/plugins.json', JSON.stringify({version:1,plugins:[{module:'unity',options:{roots:['Assets/Explicit.cs']}}]}));
+  await buildGraph(root);
+  const {findOrphans} = await import('../src/graph/orphans.js');
+  const report = findOrphans(graph()), candidates = new Set(report.candidates.map(c => c.path));
+  for (const name of ['Bootstrap','Helper','EditorBoot','Menu','EditorClass','Explicit']) assert(!candidates.has(`Assets/${name}.cs`), name);
+  for (const name of ['Fake','WrongNamespace','InvalidSignature']) assert(candidates.has(`Assets/${name}.cs`), name);
+  assert(report.roots.some(r => r.path === 'Assets/Bootstrap.cs' && r.reason.includes('RuntimeInitializeOnLoadMethod')));
+  assert(report.roots.some(r => r.path === 'Assets/Explicit.cs' && r.reason === 'Configured root'));
 });

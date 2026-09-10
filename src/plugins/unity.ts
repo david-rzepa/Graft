@@ -160,6 +160,12 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
   const classMembers = new Map<string, NodeV1[]>();
   const fieldCandidates = new Map<string, NodeV1[]>();
   const callbacksByMethod = new Set<string>();
+  const scriptRoots: { path: string; reason: string; evidence: string }[] = [];
+  const entryAttributes = (ast: SyntaxNode): string[] => ast.namedChildren
+    .filter(n => n.type === 'attribute_list').flatMap(n => n.namedChildren)
+    .filter(n => n.type === 'attribute').map(n =>
+      (n.childForFieldName('name')?.text ?? '').replace(/\s+/g, '').replace(/^global::/, '').replace(/Attribute$/, ''));
+  const hasAttribute = (names: string[], namespace: string, name: string) => names.includes(name) || names.includes(`${namespace}.${name}`);
   const literalLoads: { path: string; line: number; api: string; key: string }[] = [];
   const language = await loadWasmLanguage('c_sharp') as Language | null;
   if (!language) throw new Error('Unity plugin requires the bundled C# grammar');
@@ -179,6 +185,20 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
             owner = matchCore(path, ast, 'class', name);
             const base = ast.namedChildren.find(n => n.type === 'base_list')?.text.replace(/^:\s*/, '').split(',')[0]?.trim();
             if (owner && base) bases.set(owner.id, base);
+            if (hasAttribute(entryAttributes(ast), 'UnityEditor', 'InitializeOnLoad')) {
+              scriptRoots.push({ path, reason: 'Unity InitializeOnLoad', evidence: `${path}:${ast.startPosition.row + 1}: ${name}` });
+            }
+          }
+          if (ast.type === 'method_declaration') {
+            const attributes = entryAttributes(ast);
+            const isStatic = ast.namedChildren.some(n => n.type === 'modifier' && n.text === 'static');
+            const parameterless = ast.childForFieldName('parameters')?.namedChildCount === 0;
+            const generic = ast.namedChildren.some(n => n.type === 'type_parameter_list');
+            for (const [namespace, name] of [['UnityEngine', 'RuntimeInitializeOnLoadMethod'], ['UnityEditor', 'InitializeOnLoadMethod'], ['UnityEditor', 'MenuItem']]) {
+              if (isStatic && !generic && (parameterless || name === 'MenuItem') && hasAttribute(attributes, namespace, name)) {
+                scriptRoots.push({ path, reason: `Unity ${name}`, evidence: `${path}:${ast.startPosition.row + 1}: ${ast.childForFieldName('name')?.text}` });
+              }
+            }
           }
           if (owner && ast.type === 'method_declaration') {
             const name = ast.childForFieldName('name')?.text ?? '';
@@ -359,15 +379,14 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
       if (child.startsWith(path + '/') && !folders.has(child)) rootAsset(child, reason, evidence);
     }
   };
+  for (const entry of scriptRoots) rootAsset(entry.path, entry.reason, entry.evidence);
   for (const [path] of assetTargets) {
-    if (folders.has(path)) continue;
+    // Compiling a script or placing it in a special folder does not make it live.
+    if (folders.has(path) || path.endsWith('.cs')) continue;
     if (/(?:^|\/)ProjectSettings\//.test(path)) rootAsset(path, 'Project settings');
     if (/(?:^|\/)Resources\//.test(path)) rootAsset(path, 'Resources');
     if (/(?:^|\/)StreamingAssets\//.test(path)) rootAsset(path, 'StreamingAssets');
     if (/(?:^|\/)Editor(?: Default Resources)?\//.test(path) || /(?:^|\/)Gizmos\//.test(path)) rootAsset(path, 'Editor assets');
-    // This report finds asset candidates, not unused C# types. Keep code and its
-    // discovered asset dependencies conservatively alive, including reflection.
-    if (path.endsWith('.cs')) rootAsset(path, 'C# code (conservative)');
     if (/\.(?:dll|asmdef|asmref|rsp|so|dylib|bundle)$/.test(path) || /(?:^|\/)Plugins\//.test(path)) rootAsset(path, 'Plugin or assembly input (conservative)');
   }
   let sawBuildSettings = false;
@@ -459,5 +478,5 @@ async function analyze(ctx: PluginContext): Promise<PluginResult> {
 }
 function spanSize(n: NodeV1): number { const m = /^L(\d+)-L(\d+)$/.exec(n.span); return m ? Number(m[2]) - Number(m[1]) : Infinity; }
 
-const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.1.4', analyze };
+const unity: GraphPlugin = { apiVersion: 1, id: 'unity', version: '1.2.0', analyze };
 export default unity;

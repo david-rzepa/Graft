@@ -219,7 +219,7 @@ Unity serialization references:
 [Text serialization format](https://docs.unity3d.com/2022.3/Documentation/Manual/FormatDescription.html),
 [UnityEvents](https://docs.unity3d.com/2022.3/Documentation/Manual/UnityEvents.html).
 
-### Orphan candidates (Unity plugin 1.1+)
+### Orphan candidates (Unity plugin 1.2+)
 
 ```sh
 graft orphans                     # first 100 candidates, with coverage gaps
@@ -235,10 +235,24 @@ it never narrows the graph used for reachability. JSON `totalCandidates` counts
 all matching candidates before the display limit.
 
 Roots include enabled `EditorBuildSettings` scenes (path and GUID), serialized
-project settings (including preloaded assets), every Resources/StreamingAssets
-asset, Addressables entries and folder descendants, AssetBundle importer labels,
-editor assets, and plugin/assembly inputs. C# code is conservatively retained; this is not unused-script
-analysis. Importer fileID/GUID references and serialized Addressables AssetReferences
+project settings (including preloaded assets), non-script Resources/StreamingAssets
+assets, Addressables entries and folder descendants, AssetBundle importer labels,
+non-script editor assets, and plugin/assembly inputs. Scripts are not implicit roots,
+even under `Plugins/`, `Editor/`, or `Resources/`. They become reachable through
+serialized `m_Script` references, indexed C# dependencies, configured roots, or
+recognized Unity entry attributes: static `RuntimeInitializeOnLoadMethod`,
+static `InitializeOnLoadMethod`, static `MenuItem`, and class `InitializeOnLoad`.
+Ordinary lifecycle methods such as `Awake` do not independently retain a script.
+Attribute detection uses the C# syntax tree; comments and strings do not count.
+
+Rebuild indexes made with Unity plugin 1.1.x before using this policy. Unreachable
+scripts and assets referenced only by those scripts can now appear as candidates.
+This is whole-file reachability, not unused-member analysis: any reachable member
+retains its entire script file. C# type resolution, reflection, attribute aliases,
+and other editor/build hooks are incomplete; configure explicit roots for entry
+points the index cannot discover. Candidate status never proves deletion is safe.
+
+Importer fileID/GUID references and serialized Addressables AssetReferences
 add dependency edges. Reachability is computed across whole assets, so unreachable
 cycles remain candidates even when they have incoming references from each other.
 
